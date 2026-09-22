@@ -1,4 +1,4 @@
-# Plugin setup contract (`/setup`) — design
+# Plugin setup contract (`/gateway` setup) — design
 
 Date: 2026-09-22 · Status: approved in chat · Branch: `feat/plugin-setup-contract`
 
@@ -23,8 +23,10 @@ drives or verifies them. The Discord plugin (0.2.0) is the worst case:
   know about.
 
 Net effect: setting up an app needs a TTY, a systemd box, and hand-written
-JSON. The goal of this design: **one in-REPL command, app-agnostic, where the
-only manual steps are the ones only a human in a web portal can do.**
+JSON. The goal of this design: **one in-REPL flow, app-agnostic, where the only
+manual steps are the ones only a human in a web portal can do. The flow
+lives inside the existing `/gateway` connections panel — there is no new
+top-level command.**
 
 ## Reference: the hermes logic being copied
 
@@ -99,16 +101,21 @@ each app's config path, and compute state — *configured*, *needs setup
 (which fields)*, *broken (verify fails)*. Presence checks read keys only;
 values are never logged or rendered. This replaces `SETUP_PROBES`:
 
-- `/gateway` app rows show `needs setup — /setup discord` (still one line,
-  now accurate for any app), or `broken — doctor fails`.
-- `/setup`'s app picker is the same registry.
+- `/gateway` app rows show `needs setup` or `broken — doctor fails`
+  (one line, accurate for any app). Enter on such a row opens the setup
+  flow; Enter on a configured row keeps today's toggle behavior.
+- The manager loop (`setup/install_manager.rs`) gains one optional axis —
+  a per-row `setup` action (a `ManagerItem` flag plus an optional closure
+  on `run_install_manager`) — so `/gateway` can bind Enter to setup
+  without `/skills`, `/plugins`, `/cron` or `/memory` changing at all.
 
-### 3. The `/setup` command
+### 3. The setup flow (inside `/gateway`)
 
 In-REPL modal, reusing the `setup/connect.rs` machinery (the provider
 connect flow is the exact template: pick → paste → verify → done):
 
-1. Pick an app (registry rows, missing counts shown).
+1. The app row is already picked (Enter on a `needs setup` / `broken` row
+   opens the flow); the missing fields are listed with their descriptions.
 2. For each missing field: description, portal URL, and input — secret
    fields masked and never echoed, never sent to the model.
 3. Derived fields filled silently.
@@ -119,10 +126,11 @@ connect flow is the exact template: pick → paste → verify → done):
 6. Run `post_steps`: register the outgoing tool into the plugin lock, then
    offer to start the daemon (section 4).
 
-Headless twin: `gray setup <app> --token … --channel-id …` (flags or env for
-every non-derived field). Same code path, non-interactive; error messages
-never contain values (mirror the plugin's existing rule: "errors never
-contain config values").
+Headless twin: `gray gateway setup <app> --token … --channel-id …` (flags
+or env for every non-derived field) — it sits in the existing
+`gray gateway` command family. Same code path, non-interactive; error
+messages never contain values (mirror the plugin's existing rule: "errors
+never contain config values").
 
 ### 4. Start and supervision
 
@@ -154,14 +162,15 @@ the declaration asks for it; the paste path always remains.
 
 ### 7. Testing
 
-- Unit: registry merge and precedence; missing/present/derived field state;
+- Unit: registry merge and precedence; the new manager action axis (Enter
+  routes to setup for flagged rows, toggle is unchanged elsewhere); missing/present/derived field state;
   config-write shape (0600, atomic rename, tmp cleanup); secret redaction on
   every output and error path; init-probe selection table (including "none").
 - Byte-stability prompt/UI tests per repo convention for the new modal
   states.
-- Integration, on this box, with a real token: `/setup discord` → doctor
-  passes → daemon runs under the "none" supervisor → `discord_send` posts to
-  the configured channel. Requires the user's bot token and the bot invited
+- Integration, on this box, with a real token: `/gateway` → Enter on the
+  discord row → flow completes → doctor passes → daemon runs under the
+  "none" supervisor → `discord_send` posts to the configured channel. Requires the user's bot token and the bot invited
   to the guild.
 
 ### 8. Risks
