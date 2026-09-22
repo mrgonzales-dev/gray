@@ -14,7 +14,8 @@ drives or verifies them. The Discord plugin (0.2.0) is the worst case:
   nothing.
 - The wizard gates a first "hello" behind four budget/pricing questions and
   only accepts hidden token input on a real TTY, so no agent or headless
-  flow can drive it.
+  flow can drive it. (This design removes the budget from the path
+  entirely — see section 6.)
 - Its service is systemd-user only; on a runit box every service verb fails
   with "systemctl failed".
 - Core's only per-app knowledge is a hardcoded probe table
@@ -64,14 +65,14 @@ Schema (JSON, in the catalog entry):
 setup: {
   config_path: "~/.config/<app>/config.json",   // app-owned file
   fields: [
-    { key, kind, description, url?, secret?, default?, choices? }
+    { key, kind, description, url?, secret?, default?, choices?, picker? }
     // kind: required | optional | derived
     //   required: user must supply (secret entries are masked, never logged)
     //   optional: user may supply; default may be empty
     //   derived:   gray fills it, no question (gray_bin, gray_home, workdir)
+    // picker: "channels" — after the token verifies, offer the destination
+    //         picker (section 5) instead of paste-an-ID
   ],
-  budget?: { daily_usd, turn_usd, input_per_million, output_per_million },
-  // optional sane defaults, editable later via the app's own commands
   verify: ["gray-<app>", "doctor"],   // run after writing; success = configured
   post_steps: ["register", "start"],  // ordered actions the flow performs
   service?: { argv: ["gray-<app>", "run"], name: "gray-<app>" }
@@ -88,9 +89,6 @@ The Discord v1 declaration, concretely:
 - optional: `allowed_users`
 - derived: `gray_bin` (current exe), `gray_home` (`~/.gray`), `workdir`
   (the config's directory)
-- budget defaults: daily 5, turn 1, input 0.5/M, output 2/M, model taken
-  from gray's own configured model (the plugin requires
-  `budget.model == gray's model`)
 - verify: `gray-discord doctor`
 - post_steps: register `discord_send` into the plugin lock, then start
 
@@ -140,15 +138,36 @@ job (gray already has background-job supervision), reports the PID, and
 offers stop. Per-init failures are printed and non-fatal; the wizard never
 exits non-zero because a restart failed.
 
-### 5. Channel picker (v1, scoped to the concrete need)
+### 5. Channel picker (in v1)
 
-Once `token` verifies, a `channel`-kind field can offer a picker instead of
-paste-an-ID: query the guild's channels over REST and let the user choose
-(for the originating request: guild `1544925612823547984`, newest channel —
-snowflake IDs are time-ordered, so newest = highest ID). Only invoked when
-the declaration asks for it; the paste path always remains.
+Once `token` verifies, a `channel`-kind field offers a picker instead of
+paste-an-ID. The list is every destination the bot can actually post to:
 
-### 6. Explicitly out of scope for v1
+- the guild's channels (for the originating request: guild
+  `1544925612823547984` — snowflake IDs are time-ordered, so the newest
+  channel is the highest ID and sorts first), and
+- the DM channel between the bot and the owner (resolved through
+  `POST /users/@me/channels` with the collected `owner_id`) — a DM is a
+  perfectly good home channel, and it is the plugin's own historical
+  default.
+
+Only invoked when the declaration marks a field as a channel field; the
+paste-an-ID path always remains for headless runs and for channels the
+picker cannot see.
+
+### 6. Companion change: the Discord plugin stops hard-requiring a budget
+
+Setup writes no budget, so the daemon must start without one. Today
+`gray-discord run` validates the policy against the model and sets
+`budget_required` (`gateway.rs:382-384`), which fails startup. The plugin
+change: validate only when a policy is present, and set
+`budget_required = policy.is_some_and(...)` — absent budget means no
+ledger and no spend gate, with `gray discord budget set` remaining as the
+opt-in accounting path. This lives in the plugin repo
+(`/home/vstaln/grayplugins/gray-discord-plugin`), lands as part of this
+effort, and is the only plugin change v1 needs.
+
+### 7. Explicitly out of scope for v1
 
 - Pairing automation (the stubbed wizard path): deferred. `owner_id` is a
   plain required field for now; the plugin's dead pairing code is bypassed,
@@ -160,7 +179,7 @@ the declaration asks for it; the paste path always remains.
   ships Discord only.
 - Plugin self-declaration via manifest: v2 (section 1).
 
-### 7. Testing
+### 8. Testing
 
 - Unit: registry merge and precedence; the new manager action axis (Enter
   routes to setup for flagged rows, toggle is unchanged elsewhere); missing/present/derived field state;
@@ -173,7 +192,7 @@ the declaration asks for it; the paste path always remains.
   "none" supervisor → `discord_send` posts to the configured channel. Requires the user's bot token and the bot invited
   to the guild.
 
-### 8. Risks
+### 9. Risks
 
 - Core writes another app's config file. Mitigation: the app's own loader
   validates on every start, and `verify` runs immediately after the write;
