@@ -1,8 +1,8 @@
-# Plugin setup contract (`/gateway` setup) — design
+# App setup in `/gateway` — design
 
 Date: 2026-09-22 · Status: approved in chat · Branch: `feat/plugin-setup-contract`
 
-## Problem
+## What's broken today
 
 gray's app plugins each ship their own setup program, and nothing in core
 drives or verifies them. The Discord plugin (0.2.0) is the worst case:
@@ -51,7 +51,7 @@ top-level command.**
 
 ## Design
 
-### 1. The declaration
+### 1. What each app declares
 
 A `setup` block per app. **v1: declared in core's `CATALOG` entry** in
 `crates/gray/src/plugin_cli.rs` — same precedence rule as hermes (core entry
